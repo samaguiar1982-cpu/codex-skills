@@ -1,0 +1,25 @@
+# Dependabot config for codex-skills.
+# Implements MC-X4=A (Sam pick, 2026-04-24): keep GitHub Actions pinned to
+# SHAs (not floating @v4 tags) for supply-chain hygiene, and let Dependabot
+# automate weekly SHA bump PRs.
+#
+# Scope: scans every job in .github/workflows/ and the staged YAML at
+# skills/scheduled-task-validator/ci/scheduled-task-validator-weekly.yml.proposed
+# (Dependabot scans all workflow-shaped files in the repo by default).
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"
