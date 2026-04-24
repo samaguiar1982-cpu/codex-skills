@@ -1,2 +1,110 @@
-# To activate this workflow:\n#   git mv skills/scheduled-task-validator/ci/scheduled-task-validator-weekly.yml.proposed \\\n#          .github/workflows/scheduled-task-validator-weekly.yml\n#   git commit -m \'activate weekly validator\'\n#   git push\n#\n# Prereq: create a repo secret SAIL_TASKS_TOKEN with read access to\n# samaguiar1982-cpu/sail-scheduled-tasks (a fine-grained PAT scoped to that\n# single repo, contents:read).\n#\n# Implements Q-W1=A (Sam pick, 2026-04-23): migrate the validator off the\n# laptop launchd plist (which hit a TCC/Full Disk Access wall) onto a remote\n# runner. Mondays 15:00 UTC mirrors the local plist\'s wall-clock time during EDT.\n\nname: scheduled-task-validator weekly\n\non:\n  schedule:\n    - cron: \'0 15 * * 1\'\n  workflow_dispatch: {}\n\npermissions:\n  contents: read\n\njobs:\n  validate:\n    name: Run validate.sh against mirrored SF-chain tasks\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - name: Checkout codex-skills\n        uses: actions/checkout@v4\n        with:\n          path: codex-skills\n\n      - name: Checkout sail-scheduled-tasks\n        uses: actions/checkout@v4\n        with:\n          repository: samaguiar1982-cpu/sail-scheduled-tasks\n          token: ${{ secrets.SAIL_TASKS_TOKEN }}\n          path: sail-scheduled-tasks\n\n      - name: Stage repos at the absolute paths validate.sh expects\n        run: |\n          set -euo pipefail\n          # validate.sh hardcodes /Users/samaguiar/... paths. Symlink the\n          # checked-out repos into that layout so the script and its self-\n          # integrity check (against the pinned EXPECTED_HASH) run unchanged.\n          sudo mkdir -p /Users/samaguiar/Documents/Claude\n          sudo mkdir -p /Users/samaguiar/Documents/Projects/Skills\n          sudo mkdir -p /Users/samaguiar/Documents/Codex/validator-runs\n          sudo ln -s \"$GITHUB_WORKSPACE/sail-scheduled-tasks\" \\\n            /Users/samaguiar/Documents/Claude/Scheduled\n          sudo ln -s \"$GITHUB_WORKSPACE/codex-skills/skills/scheduled-task-validator\" \\\
-            /Users/samaguiar/Documents/Projects/Skills/scheduled-task-validator\n          sudo chown -R \"$(id -u):$(id -g)\" /Users/samaguiar\n\n      - name: Show staged layout (sanity check)\n        run: |\n          echo \"--- Scheduled tasks visible to validator ---\"\n          ls -la /Users/samaguiar/Documents/Claude/Scheduled/ || true\n          echo \"--- Validator script visible at expected path ---\"\n          ls -la /Users/samaguiar/Documents/Projects/Skills/scheduled-task-validator/ || true\n\n      - name: Run validate.sh\n        id: validator\n        run: |\n          set +e\n          bash /Users/samaguiar/Documents/Projects/Skills/scheduled-task-validator/validate.sh\n          EC=$?\n          set -e\n          echo \"exit_code=$EC\" >> \"$GITHUB_OUTPUT\"\n          if [ \"$EC\" -eq 2 ]; then\n            echo \"::error::validate.sh self-integrity check failed. Pinned hash mismatch.\"\n            exit 2\n          fi\n          {\n            echo \"## scheduled-task-validator weekly run\"\n            echo\n            echo \"- Exit code: \\`$EC\\`\"\n            if [ \"$EC\" -eq 0 ]; then\n              echo \"- Result: **PASS**\"\n            else\n              echo \"- Result: **FAIL** (see report artifact for per-check detail)\"\n            fi\n          } >> \"$GITHUB_STEP_SUMMARY\"\n\n      - name: Append report to job summary\n        if: always()\n        run: |\n          REPORT=\"/Users/samaguiar/Documents/Codex/validator-runs/$(date -u +%Y-%m-%d).md\"\n          if [ -f \"$REPORT\" ]; then\n            echo \"\" >> \"$GITHUB_STEP_SUMMARY\"\n            echo \"---\" >> \"$GITHUB_STEP_SUMMARY\"\n            echo \"\" >> \"$GITHUB_STEP_SUMMARY\"\n            cat \"$REPORT\" >> \"$GITHUB_STEP_SUMMARY\"\n          else\n            echo \"::warning::No report found at $REPORT\"\n          fi\n\n      - name: Upload report as artifact\n        if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: validator-run-${{ github.run_id }}\n          path: /Users/samaguiar/Documents/Codex/validator-runs/*.md\n          if-no-files-found: warn\n          retention-days: 90\n\n      - name: Fail job if validator reported FAIL\n        if: steps.validator.outputs.exit_code != \'0\'\n        run: |\n          echo \"::error::Validator exit code was ${{ steps.validator.outputs.exit_code }}. See report artifact and step summary.\"\n          exit 1
+# To activate this workflow:
+#   git mv skills/scheduled-task-validator/ci/scheduled-task-validator-weekly.yml.proposed \
+#          .github/workflows/scheduled-task-validator-weekly.yml
+#   git commit -m 'activate weekly validator'
+#   git push
+#
+# Prereq: create a repo secret SAIL_TASKS_TOKEN with read access to
+# samaguiar1982-cpu/sail-scheduled-tasks (a fine-grained PAT scoped to that
+# single repo, contents:read).
+#
+# Implements Q-W1=A (Sam pick, 2026-04-23): migrate the validator off the
+# laptop launchd plist (TCC/Full Disk Access wall) onto a remote runner.
+# Mondays 15:00 UTC mirrors the local plist's wall-clock time during EDT.
+#
+# v2.2.0 (Q-W8=A, 2026-04-24): validate.sh now honors SAIL_SCHED_DIR and
+# SAIL_REPORT_DIR env vars, so we no longer need the symlink/sudo/chown dance.
+# Defaults preserve macOS launchd behavior; CI just sets the two env vars to
+# point at the checked-out repos and the workflow workspace.
+
+name: scheduled-task-validator weekly
+
+on:
+  schedule:
+    - cron: '0 15 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Run validate.sh against mirrored SF-chain tasks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SAIL_SCHED_DIR: ${{ github.workspace }}/sail-scheduled-tasks
+      SAIL_REPORT_DIR: ${{ github.workspace }}/validator-runs
+    steps:
+      - name: Checkout codex-skills
+        uses: actions/checkout@v4
+        with:
+          path: codex-skills
+
+      - name: Checkout sail-scheduled-tasks
+        uses: actions/checkout@v4
+        with:
+          repository: samaguiar1982-cpu/sail-scheduled-tasks
+          token: ${{ secrets.SAIL_TASKS_TOKEN }}
+          path: sail-scheduled-tasks
+
+      - name: Prepare report dir
+        run: mkdir -p "$SAIL_REPORT_DIR"
+
+      - name: Show staged layout (sanity check)
+        run: |
+          echo "--- Scheduled tasks visible to validator ---"
+          ls -la "$SAIL_SCHED_DIR" || true
+          echo "--- Validator script ---"
+          ls -la "$GITHUB_WORKSPACE/codex-skills/skills/scheduled-task-validator/" || true
+
+      - name: Run validate.sh
+        id: validator
+        run: |
+          set +e
+          bash "$GITHUB_WORKSPACE/codex-skills/skills/scheduled-task-validator/validate.sh"
+          EC=$?
+          set -e
+          echo "exit_code=$EC" >> "$GITHUB_OUTPUT"
+          if [ "$EC" -eq 2 ]; then
+            echo "::error::validate.sh self-integrity check failed. Pinned hash mismatch."
+            exit 2
+          fi
+          {
+            echo "## scheduled-task-validator weekly run"
+            echo
+            echo "- Exit code: \`$EC\`"
+            if [ "$EC" -eq 0 ]; then
+              echo "- Result: **PASS**"
+            else
+              echo "- Result: **FAIL** (see report artifact for per-check detail)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Append report to job summary
+        if: always()
+        run: |
+          REPORT="$SAIL_REPORT_DIR/$(date -u +%Y-%m-%d).md"
+          if [ -f "$REPORT" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "---" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No report found at $REPORT"
+          fi
+
+      - name: Upload report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-run-${{ github.run_id }}
+          path: ${{ github.workspace }}/validator-runs/*.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Fail job if validator reported FAIL
+        if: steps.validator.outputs.exit_code != '0'
+        run: |
+          echo "::error::Validator exit code was ${{ steps.validator.outputs.exit_code }}. See report artifact and step summary."
+          exit 1
