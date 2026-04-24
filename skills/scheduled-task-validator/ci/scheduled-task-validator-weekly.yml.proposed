@@ -16,6 +16,14 @@
 # SAIL_REPORT_DIR env vars, so we no longer need the symlink/sudo/chown dance.
 # Defaults preserve macOS launchd behavior; CI just sets the two env vars to
 # point at the checked-out repos and the workflow workspace.
+#
+# MC-X4 (Sam pick, 2026-04-24): GitHub Actions are SHA-pinned (not @v4) for
+# supply-chain hygiene. Dependabot (.github/dependabot.yml) opens weekly PRs
+# to bump the pinned SHAs. To manually re-pin, fetch:
+#   curl -s https://api.github.com/repos/<owner>/<repo>/git/ref/tags/v4 | jq .object.sha
+# Pinned SHAs (verified 2026-04-24 via api.github.com /git/ref/tags/v4):
+#   actions/checkout@v4         -> 34e114876b0b11c390a56381ad16ebd13914f8d5
+#   actions/upload-artifact@v4  -> ea165f8d65b6e75b540449e92b4886f43607fa02
 
 name: scheduled-task-validator weekly
 
@@ -37,12 +45,12 @@ jobs:
       SAIL_REPORT_DIR: ${{ github.workspace }}/validator-runs
     steps:
       - name: Checkout codex-skills
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           path: codex-skills
 
       - name: Checkout sail-scheduled-tasks
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           repository: samaguiar1982-cpu/sail-scheduled-tasks
           token: ${{ secrets.SAIL_TASKS_TOKEN }}
@@ -96,7 +104,7 @@ jobs:
 
       - name: Upload report as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: validator-run-${{ github.run_id }}
           path: ${{ github.workspace }}/validator-runs/*.md
